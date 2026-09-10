@@ -20,7 +20,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat payload/part*.txt | tr -d '\r\n' | base64 --decode > project.zip
+          cat \
+            payload/part01.txt \
+            payload/part02.txt \
+            fix/p03_1.txt \
+            fix/p03_2.txt \
+            fix/p03_3.txt \
+            payload/part04.txt \
+            payload/part05.txt \
+            fix/p06_1.txt \
+            fix/p06_2.txt \
+            fix/p06_3.txt \
+            payload/part07.txt \
+            payload/part08.txt \
+          | tr -d '\r\n' | base64 --decode > project.zip
           unzip -t project.zip
           mkdir -p project
           unzip -q project.zip -d project
