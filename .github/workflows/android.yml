@@ -47,12 +47,10 @@ jobs:
           p = Path('project/app/src/main/java/com/riskont/sgkform/MainActivity.kt')
           s = p.read_text()
 
-          # V1.3 duzeltmeleri korunuyor.
           s = re.sub(r'^\s*put\(canvas, "0", 204f, 249\.65f, 20f\)\s*$', '', s, flags=re.M)
           for y in ('131.65','146.65','161.65','191.65','206.65'):
               s = re.sub(r'^\s*put\(canvas, "0", 441f, '+re.escape(y)+r'f, 100f\)\s*$', '', s, flags=re.M)
 
-          # put() fonksiyonunu brace-count ile bul.
           m = re.search(r'(?m)^\s*(?:private\s+)?fun\s+put\s*\(', s)
           if not m:
               raise SystemExit('put() function not found')
@@ -73,31 +71,23 @@ jobs:
               raise SystemExit('put() closing brace not found')
 
           fn = s[m.start():end]
-
-          # KRITIK V1.4: put() yalnizca metin cizer. Hucre arkasina beyaz/renkli
-          # dikdortgen basan tum geometri cizimlerini kaldir; orijinal PDF grid'i
-          # alttan kesintisiz gorunur kalir.
           fn = re.sub(r'(?m)^\s*canvas\.drawRect\([^\n]*\)\s*$', '', fn)
           fn = re.sub(r'(?m)^\s*canvas\.drawRoundRect\([^\n]*\)\s*$', '', fn)
           fn = re.sub(r'(?m)^\s*canvas\.drawColor\([^\n]*\)\s*$', '', fn)
-
-          # Birden fazla satira yayilmis drawRect/drawRoundRect cagrilarini da temizle.
           fn = re.sub(r'canvas\.drawRect\((?s:.*?)\)\s*', '', fn)
           fn = re.sub(r'canvas\.drawRoundRect\((?s:.*?)\)\s*', '', fn)
 
-          # Metin mutlaka siyah ve tam opak olsun; bu ayarlar arka plan boyamaz.
           draw = 'canvas.drawText(safeText, drawX, baseline - 2.0f, paint)'
           legacy = 'canvas.drawText(text, drawX, baseline, paint)'
           legacy2 = 'canvas.drawText(text, drawX, baseline - 2.0f, paint)'
 
-          # V1.3 safeText kirpmasi yoksa ekle.
           if 'var safeText = text' not in fn:
               old = '''        paint.textSize = size\n        paint.typeface = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT\n        paint.textAlign = if (center) Paint.Align.CENTER else Paint.Align.LEFT\n        val drawX = if (center) x + maxWidth / 2f else x\n        canvas.drawText(text, drawX, baseline, paint)'''
               new = '''        paint.textSize = size\n        paint.typeface = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT\n        paint.textAlign = if (center) Paint.Align.CENTER else Paint.Align.LEFT\n        var safeText = text\n        if (!center && maxWidth > 0f) {\n            while (safeText.isNotEmpty() && paint.measureText(safeText) > maxWidth - 3f) {\n                safeText = safeText.dropLast(1)\n            }\n        }\n        val drawX = if (center) x + maxWidth / 2f else x\n        canvas.drawText(safeText, drawX, baseline - 2.0f, paint)'''
               fn = fn.replace(old, new)
 
-          # drawText'ten hemen once metin paint'ini garantiye al.
-          marker = 'paint.color = Color.BLACK\n        paint.alpha = 255\n        paint.style = Paint.Style.FILL\n        '
+          # Fully-qualified Android classes avoid import dependency in reconstructed source.
+          marker = 'paint.color = android.graphics.Color.BLACK\n        paint.alpha = 255\n        paint.style = android.graphics.Paint.Style.FILL\n        '
           if draw in fn:
               fn = fn.replace(draw, marker + draw)
           elif legacy2 in fn:
@@ -107,14 +97,12 @@ jobs:
           else:
               raise SystemExit('drawText in put() not found')
 
-          # put() icinde artik hicbir arka plan geometrisi olmamali.
           if 'canvas.drawRect(' in fn or 'canvas.drawRoundRect(' in fn or 'canvas.drawColor(' in fn:
               raise SystemExit('background drawing still exists in put()')
 
           s = s[:m.start()] + fn + s[end:]
           p.write_text(s)
-
-          print('V1.4: put() is text-only; original PDF grid will not be painted over.')
+          print('V1.4 compile fix: text-only overlay with fully-qualified Android graphics classes.')
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
