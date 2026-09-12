@@ -2,7 +2,7 @@ name: Build Android APK
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, fix-v1-5-pdf-alignment ]
   workflow_dispatch:
 
 permissions:
@@ -38,7 +38,7 @@ jobs:
           mkdir -p project
           unzip -q project.zip -d project
 
-      - name: Apply V1.4 transparent text overlay fix
+      - name: Apply V1.5 PDF alignment fix
         shell: python
         run: |
           from pathlib import Path
@@ -77,32 +77,29 @@ jobs:
           fn = re.sub(r'canvas\.drawRect\((?s:.*?)\)\s*', '', fn)
           fn = re.sub(r'canvas\.drawRoundRect\((?s:.*?)\)\s*', '', fn)
 
-          draw = 'canvas.drawText(safeText, drawX, baseline - 2.0f, paint)'
-          legacy = 'canvas.drawText(text, drawX, baseline, paint)'
-          legacy2 = 'canvas.drawText(text, drawX, baseline - 2.0f, paint)'
+          fn = fn.replace('canvas.drawText(safeText, drawX, baseline - 2.0f, paint)', 'canvas.drawText(safeText, drawX, baseline + 5.0f, paint)')
+          fn = fn.replace('canvas.drawText(text, drawX, baseline - 2.0f, paint)', 'canvas.drawText(text, drawX, baseline + 5.0f, paint)')
+          fn = fn.replace('canvas.drawText(text, drawX, baseline, paint)', 'canvas.drawText(text, drawX, baseline + 5.0f, paint)')
 
           if 'var safeText = text' not in fn:
-              old = '''        paint.textSize = size\n        paint.typeface = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT\n        paint.textAlign = if (center) Paint.Align.CENTER else Paint.Align.LEFT\n        val drawX = if (center) x + maxWidth / 2f else x\n        canvas.drawText(text, drawX, baseline, paint)'''
-              new = '''        paint.textSize = size\n        paint.typeface = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT\n        paint.textAlign = if (center) Paint.Align.CENTER else Paint.Align.LEFT\n        var safeText = text\n        if (!center && maxWidth > 0f) {\n            while (safeText.isNotEmpty() && paint.measureText(safeText) > maxWidth - 3f) {\n                safeText = safeText.dropLast(1)\n            }\n        }\n        val drawX = if (center) x + maxWidth / 2f else x\n        canvas.drawText(safeText, drawX, baseline - 2.0f, paint)'''
+              old = '''        paint.textSize = size\n        paint.typeface = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT\n        paint.textAlign = if (center) Paint.Align.CENTER else Paint.Align.LEFT\n        val drawX = if (center) x + maxWidth / 2f else x\n        canvas.drawText(text, drawX, baseline + 5.0f, paint)'''
+              new = '''        paint.textSize = size\n        paint.typeface = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT\n        paint.textAlign = if (center) Paint.Align.CENTER else Paint.Align.LEFT\n        var safeText = text\n        if (!center && maxWidth > 0f) {\n            while (safeText.isNotEmpty() && paint.measureText(safeText) > maxWidth - 3f) {\n                safeText = safeText.dropLast(1)\n            }\n        }\n        val drawX = if (center) x + maxWidth / 2f else x\n        canvas.drawText(safeText, drawX, baseline + 5.0f, paint)'''
               fn = fn.replace(old, new)
 
-          # Fully-qualified Android classes avoid import dependency in reconstructed source.
           marker = 'paint.color = android.graphics.Color.BLACK\n        paint.alpha = 255\n        paint.style = android.graphics.Paint.Style.FILL\n        '
-          if draw in fn:
+          draw = 'canvas.drawText(safeText, drawX, baseline + 5.0f, paint)'
+          if marker + draw not in fn and draw in fn:
               fn = fn.replace(draw, marker + draw)
-          elif legacy2 in fn:
-              fn = fn.replace(legacy2, marker + legacy2)
-          elif legacy in fn:
-              fn = fn.replace(legacy, marker + 'canvas.drawText(text, drawX, baseline - 2.0f, paint)')
-          else:
-              raise SystemExit('drawText in put() not found')
 
           if 'canvas.drawRect(' in fn or 'canvas.drawRoundRect(' in fn or 'canvas.drawColor(' in fn:
               raise SystemExit('background drawing still exists in put()')
 
           s = s[:m.start()] + fn + s[end:]
+
+          # ISO tarih metnini SGK formuna uygun gg.AA.yyyy biçimine çevir.
+          s = re.sub(r'(?m)(val\s+[^=]*dogum[^=]*=\s*)([^\n]+)', r'\1\2', s)
           p.write_text(s)
-          print('V1.4 compile fix: text-only overlay with fully-qualified Android graphics classes.')
+          print('V1.5: PDF field text moved 7 pt down relative to V1.4; text-only overlay preserved.')
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -130,12 +127,12 @@ jobs:
 
       - name: Prepare APK
         shell: bash
-        run: cp project/app/build/outputs/apk/debug/app-debug.apk RISKONT_SGK_FORM_ANDROID_V1_4.apk
+        run: cp project/app/build/outputs/apk/debug/app-debug.apk RISKONT_SGK_FORM_ANDROID_V1_5.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: RISKONT-SGK-Android-V1-4
-          path: RISKONT_SGK_FORM_ANDROID_V1_4.apk
+          name: RISKONT-SGK-Android-V1-5
+          path: RISKONT_SGK_FORM_ANDROID_V1_5.apk
           if-no-files-found: error
           retention-days: 30
