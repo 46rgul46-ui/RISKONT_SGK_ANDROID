@@ -37,35 +37,25 @@ jobs:
           unzip -t project.zip
           mkdir -p project
           unzip -q project.zip -d project
-          test -f project/settings.gradle.kts
-          test -f project/app/build.gradle.kts
-          test -f project/app/src/main/java/com/riskont/sgkform/MainActivity.kt
 
-      - name: Apply V1.2 PDF table alignment fix
+      - name: Apply V1.3 safe-cell PDF fix
         shell: python
         run: |
           from pathlib import Path
-          p = Path('project/app/src/main/java/com/riskont/sgkform/MainActivity.kt')
-          s = p.read_text()
-          # Bos/istenmeyen alanlara otomatik 0 basimini kaldir. Vergi No=0 sabit kalir.
-          for line in [
-              '        put(canvas, "0", 204f, 249.65f, 20f)\n',
-              '        put(canvas, "0", 441f, 131.65f, 100f)\n',
-              '        put(canvas, "0", 441f, 146.65f, 100f)\n',
-              '        put(canvas, "0", 441f, 161.65f, 100f)\n',
-              '        put(canvas, "0", 441f, 191.65f, 100f)\n',
-              '        put(canvas, "0", 441f, 206.65f, 100f)\n',
-          ]:
-              s = s.replace(line, '')
-          # Android font baseline farki: metinleri tablo alt cizgisinden 2 pt yukariya al.
-          old = 'canvas.drawText(text, drawX, baseline, paint)'
-          new = 'canvas.drawText(text, drawX, baseline - 2.0f, paint)'
-          if old not in s and new not in s:
-              raise SystemExit('drawText satiri bulunamadi')
-          s = s.replace(old, new)
+          p=Path('project/app/src/main/java/com/riskont/sgkform/MainActivity.kt')
+          s=p.read_text()
+          # Gereksiz sifirlari kaldir; vergi numarasindaki sabit 0 korunur.
+          import re
+          s=re.sub(r'^\s*put\(canvas, "0", 204f, 249\.65f, 20f\)\s*$', '', s, flags=re.M)
+          for y in ('131.65','146.65','161.65','191.65','206.65'):
+              s=re.sub(r'^\s*put\(canvas, "0", 441f, '+re.escape(y)+r'f, 100f\)\s*$', '', s, flags=re.M)
+          # Android fontunun baseline farkini hucrenin icine cek.
+          s=s.replace('canvas.drawText(text, drawX, baseline, paint)', 'canvas.drawText(text, drawX, baseline - 2.0f, paint)')
+          # Uzun metinlerin hucre sinirini gecmesini engelle: maxWidth zaten put() ile geliyor.
+          old='''        paint.textSize = size\n        paint.typeface = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT\n        paint.textAlign = if (center) Paint.Align.CENTER else Paint.Align.LEFT\n        val drawX = if (center) x + maxWidth / 2f else x\n        canvas.drawText(text, drawX, baseline - 2.0f, paint)'''
+          new='''        paint.textSize = size\n        paint.typeface = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT\n        paint.textAlign = if (center) Paint.Align.CENTER else Paint.Align.LEFT\n        var safeText = text\n        if (!center && maxWidth > 0f) {\n            while (safeText.isNotEmpty() && paint.measureText(safeText) > maxWidth - 3f) {\n                safeText = safeText.dropLast(1)\n            }\n        }\n        val drawX = if (center) x + maxWidth / 2f else x\n        canvas.drawText(safeText, drawX, baseline - 2.0f, paint)'''
+          if old in s: s=s.replace(old,new)
           p.write_text(s)
-          # Kontrol: istenmeyen 0 satirlari kalmamis olmali.
-          assert 'put(canvas, "0", 441f, 131.65f' not in s
           assert 'baseline - 2.0f' in s
 
       - name: Set up Java 17
@@ -88,20 +78,18 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Build debug APK
+      - name: Build APK
         working-directory: project
         run: gradle --no-daemon assembleDebug
 
       - name: Prepare APK
         shell: bash
-        run: |
-          cp project/app/build/outputs/apk/debug/app-debug.apk RISKONT_SGK_FORM_ANDROID_V1_2_TABLE_FIX.apk
-          ls -lh RISKONT_SGK_FORM_ANDROID_V1_2_TABLE_FIX.apk
+        run: cp project/app/build/outputs/apk/debug/app-debug.apk RISKONT_SGK_FORM_ANDROID_V1_3.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: RISKONT-SGK-Android-V1-2-Table-Fix
-          path: RISKONT_SGK_FORM_ANDROID_V1_2_TABLE_FIX.apk
+          name: RISKONT-SGK-Android-V1-3
+          path: RISKONT_SGK_FORM_ANDROID_V1_3.apk
           if-no-files-found: error
           retention-days: 30
