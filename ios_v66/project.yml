@@ -17,7 +17,7 @@ targets:
     sources:
       - Sources
     resources:
-      - Resources
+      - path: Resources/sgk_referans_form.pdf
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: tr.riskont.sgkform.ios
