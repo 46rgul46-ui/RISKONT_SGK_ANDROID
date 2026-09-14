@@ -1,0 +1,91 @@
+name: Build iOS V6.6 IPA
+
+on:
+  push:
+    branches:
+      - build-ios-v66-20260914
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Recover exact SGK PDF template
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat v66_payload/part_*.txt | tr -d '\r\n' | base64 --decode > android_project.zip
+          echo "85d5c702d7e0012ada55432ecc1c66e4fe7a8947cd1f9b6d7a69b121b75ff81b  android_project.zip" | shasum -a 256 -c -
+          rm -rf android_project
+          mkdir android_project
+          unzip -q android_project.zip -d android_project
+          mkdir -p ios_v66/Resources
+          cp android_project/app/src/main/assets/sgk_referans_form.pdf ios_v66/Resources/sgk_referans_form.pdf
+          echo "b2eb947c8e39efe85a90f43a2d5836886d581858cbcd1e6e237dcc73c74075f3  ios_v66/Resources/sgk_referans_form.pdf" | shasum -a 256 -c -
+
+      - name: Install XcodeGen
+        shell: bash
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: ios_v66
+        run: xcodegen generate
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build unsigned iPhone app
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project ios_v66/GeciciKorumaSGK.xcodeproj \
+            -scheme GeciciKorumaSGK \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath ios_v66/build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            clean build
+
+      - name: Verify and package IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="ios_v66/build/Build/Products/Release-iphoneos/GeciciKorumaSGK.app"
+          test -d "$APP"
+          test -f "$APP/GeciciKorumaSGK"
+          test -f "$APP/sgk_referans_form.pdf"
+          echo "b2eb947c8e39efe85a90f43a2d5836886d581858cbcd1e6e237dcc73c74075f3  $APP/sgk_referans_form.pdf" | shasum -a 256 -c -
+          file "$APP/GeciciKorumaSGK"
+          file "$APP/GeciciKorumaSGK" | grep -q 'arm64'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")" = "tr.riskont.sgkform.ios"
+          rm -rf ipa_package
+          mkdir -p ipa_package/Payload
+          cp -R "$APP" ipa_package/Payload/
+          (cd ipa_package && zip -qry ../GECICI_KORUMA_SGK_FORM_V6_6_iOS_UNSIGNED.ipa Payload)
+          unzip -t GECICI_KORUMA_SGK_FORM_V6_6_iOS_UNSIGNED.ipa
+          shasum -a 256 GECICI_KORUMA_SGK_FORM_V6_6_iOS_UNSIGNED.ipa > GECICI_KORUMA_SGK_FORM_V6_6_iOS_UNSIGNED.ipa.sha256
+          printf '%s\n' \
+            'Bu IPA Apple gelistirici sertifikasi ile imzalanmamistir.' \
+            'Standart iPhone kurulumu icin AltStore/Sideloadly ile Apple ID uzerinden yeniden imzalanmalidir.' \
+            'App Store veya TestFlight icin Apple Developer sertifikasi/provisioning gerekir.' \
+            > IOS_KURULUM_NOTU.txt
+
+      - name: Upload iOS IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: GECICI-KORUMA-SGK-FORM-V6-6-iOS
+          path: |
+            GECICI_KORUMA_SGK_FORM_V6_6_iOS_UNSIGNED.ipa
+            GECICI_KORUMA_SGK_FORM_V6_6_iOS_UNSIGNED.ipa.sha256
+            IOS_KURULUM_NOTU.txt
+          if-no-files-found: error
+          retention-days: 30
