@@ -79,7 +79,7 @@ final class OCRService {
         let req = VNRecognizeTextRequest()
         req.recognitionLevel = .accurate
         req.usesLanguageCorrection = !numeric
-        if req.supportedRecognitionLanguages.contains("tr-TR") { req.recognitionLanguages = ["tr-TR"] }
+        req.recognitionLanguages = ["tr-TR"]
         req.regionOfInterest = CGRect(x: topLeftROI.minX, y: 1.0 - topLeftROI.maxY, width: topLeftROI.width, height: topLeftROI.height)
         let handler = VNImageRequestHandler(cgImage: cg, orientation: .up, options: [:])
         try handler.perform([req])
