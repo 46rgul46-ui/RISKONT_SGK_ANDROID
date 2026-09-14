@@ -1,0 +1,226 @@
+name: Publish iOS V6.6 to TestFlight
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BUNDLE_ID: tr.riskont.sgkform.ios
+  APP_NAME: GeciciKorumaSGK
+
+jobs:
+  publish-testflight:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select current supported Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Verify Xcode version
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          MAJOR=$(xcodebuild -version | awk '/Xcode/{split($2,a,"."); print a[1]}')
+          if [ "$MAJOR" -lt 26 ]; then
+            echo "TestFlight upload in 2026 requires Xcode 26 or newer." >&2
+            exit 1
+          fi
+
+      - name: Verify required Apple credentials
+        shell: bash
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          IOS_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_BASE64 }}
+          IOS_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          for v in APPLE_TEAM_ID IOS_DISTRIBUTION_CERTIFICATE_BASE64 IOS_DISTRIBUTION_CERTIFICATE_PASSWORD IOS_PROVISIONING_PROFILE_BASE64 APP_STORE_CONNECT_KEY_ID APP_STORE_CONNECT_ISSUER_ID APP_STORE_CONNECT_API_KEY_BASE64; do
+            if [ -z "${!v:-}" ]; then
+              echo "Missing required GitHub secret: $v" >&2
+              exit 1
+            fi
+          done
+
+      - name: Recover exact SGK template
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat v66_payload/part_*.txt | tr -d '\r\n' | base64 --decode > android_project.zip
+          echo "85d5c702d7e0012ada55432ecc1c66e4fe7a8947cd1f9b6d7a69b121b75ff81b  android_project.zip" | shasum -a 256 -c -
+          rm -rf android_project
+          mkdir android_project
+          unzip -q android_project.zip -d android_project
+          mkdir -p ios_v66/Resources
+          cp android_project/app/src/main/assets/sgk_referans_form.pdf ios_v66/Resources/sgk_referans_form.pdf
+          echo "b2eb947c8e39efe85a90f43a2d5836886d581858cbcd1e6e237dcc73c74075f3  ios_v66/Resources/sgk_referans_form.pdf" | shasum -a 256 -c -
+
+      - name: Generate Xcode project
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          cd ios_v66
+          xcodegen generate
+
+      - name: Install Apple distribution certificate
+        shell: bash
+        env:
+          CERT_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/riskont-signing.keychain-db"
+          KEYCHAIN_PASSWORD=$(openssl rand -hex 24)
+          CERT_PATH="$RUNNER_TEMP/distribution.p12"
+          echo "$CERT_BASE64" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+
+      - name: Install App Store provisioning profile
+        shell: bash
+        env:
+          PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          PROFILE_PATH="$RUNNER_TEMP/profile.mobileprovision"
+          PROFILE_PLIST="$RUNNER_TEMP/profile.plist"
+          echo "$PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
+          security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST"
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$PROFILE_PLIST")
+          PROFILE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$PROFILE_PLIST")
+          APP_IDENTIFIER=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$PROFILE_PLIST")
+          echo "Provisioning profile: $PROFILE_NAME ($PROFILE_UUID)"
+          echo "Profile app identifier: $APP_IDENTIFIER"
+          case "$APP_IDENTIFIER" in
+            *.${BUNDLE_ID}) ;;
+            *) echo "Provisioning profile does not match $BUNDLE_ID" >&2; exit 1 ;;
+          esac
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$PROFILE_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+          echo "PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
+
+      - name: Archive signed iPhone app
+        shell: bash
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          BUILD_NUMBER=$((1000 + GITHUB_RUN_NUMBER))
+          xcodebuild \
+            -project ios_v66/GeciciKorumaSGK.xcodeproj \
+            -scheme GeciciKorumaSGK \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/GeciciKorumaSGK.xcarchive" \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
+            CODE_SIGN_IDENTITY='Apple Distribution' \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            clean archive
+          echo "BUILD_NUMBER=$BUILD_NUMBER" >> "$GITHUB_ENV"
+
+      - name: Export App Store Connect IPA
+        shell: bash
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>teamID</key><string>${APPLE_TEAM_ID}</string>
+            <key>signingCertificate</key><string>Apple Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>${BUNDLE_ID}</key><string>${PROFILE_NAME}</string>
+            </dict>
+            <key>uploadSymbols</key><true/>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict>
+          </plist>
+          EOF
+          rm -rf "$RUNNER_TEMP/export"
+          mkdir -p "$RUNNER_TEMP/export"
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/GeciciKorumaSGK.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
+          IPA=$(find "$RUNNER_TEMP/export" -maxdepth 1 -name '*.ipa' -print -quit)
+          test -n "$IPA"
+          cp "$IPA" "GECICI_KORUMA_SGK_FORM_V6_6_TESTFLIGHT.ipa"
+          codesign --verify --deep --strict --verbose=2 "$RUNNER_TEMP/GeciciKorumaSGK.xcarchive/Products/Applications/GeciciKorumaSGK.app"
+          unzip -t GECICI_KORUMA_SGK_FORM_V6_6_TESTFLIGHT.ipa
+          unzip -l GECICI_KORUMA_SGK_FORM_V6_6_TESTFLIGHT.ipa | grep -q 'sgk_referans_form.pdf'
+          shasum -a 256 GECICI_KORUMA_SGK_FORM_V6_6_TESTFLIGHT.ipa > GECICI_KORUMA_SGK_FORM_V6_6_TESTFLIGHT.ipa.sha256
+
+      - name: Configure App Store Connect API key
+        shell: bash
+        env:
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          echo "$API_KEY_BASE64" | base64 --decode > "$HOME/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8"
+          chmod 600 "$HOME/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8"
+
+      - name: Validate IPA with App Store Connect
+        shell: bash
+        env:
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          xcrun altool --validate-app \
+            -f GECICI_KORUMA_SGK_FORM_V6_6_TESTFLIGHT.ipa \
+            -t ios \
+            --apiKey "$KEY_ID" \
+            --apiIssuer "$ISSUER_ID"
+
+      - name: Upload to TestFlight
+        shell: bash
+        env:
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          xcrun altool --upload-app \
+            -f GECICI_KORUMA_SGK_FORM_V6_6_TESTFLIGHT.ipa \
+            -t ios \
+            --apiKey "$KEY_ID" \
+            --apiIssuer "$ISSUER_ID"
+
+      - name: Upload signed IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GECICI-KORUMA-SGK-FORM-V6-6-TESTFLIGHT
+          path: |
+            GECICI_KORUMA_SGK_FORM_V6_6_TESTFLIGHT.ipa
+            GECICI_KORUMA_SGK_FORM_V6_6_TESTFLIGHT.ipa.sha256
+          if-no-files-found: error
+          retention-days: 30
