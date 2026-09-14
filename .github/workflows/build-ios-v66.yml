@@ -62,16 +62,22 @@ jobs:
           APP="ios_v66/build/Build/Products/Release-iphoneos/GeciciKorumaSGK.app"
           test -d "$APP"
           test -f "$APP/GeciciKorumaSGK"
+
+          # Bundle.main.url(forResource:) kesin bulsun diye şablonu uygulama paketinin köküne zorunlu koy.
+          cp ios_v66/Resources/sgk_referans_form.pdf "$APP/sgk_referans_form.pdf"
           test -f "$APP/sgk_referans_form.pdf"
           echo "b2eb947c8e39efe85a90f43a2d5836886d581858cbcd1e6e237dcc73c74075f3  $APP/sgk_referans_form.pdf" | shasum -a 256 -c -
+
           file "$APP/GeciciKorumaSGK"
           file "$APP/GeciciKorumaSGK" | grep -q 'arm64'
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")" = "tr.riskont.sgkform.ios"
+
           rm -rf ipa_package
           mkdir -p ipa_package/Payload
           cp -R "$APP" ipa_package/Payload/
           (cd ipa_package && zip -qry ../GECICI_KORUMA_SGK_FORM_V6_6_iOS_UNSIGNED.ipa Payload)
           unzip -t GECICI_KORUMA_SGK_FORM_V6_6_iOS_UNSIGNED.ipa
+          unzip -l GECICI_KORUMA_SGK_FORM_V6_6_iOS_UNSIGNED.ipa | grep -q 'Payload/GeciciKorumaSGK.app/sgk_referans_form.pdf'
           shasum -a 256 GECICI_KORUMA_SGK_FORM_V6_6_iOS_UNSIGNED.ipa > GECICI_KORUMA_SGK_FORM_V6_6_iOS_UNSIGNED.ipa.sha256
           printf '%s\n' \
             'Bu IPA Apple gelistirici sertifikasi ile imzalanmamistir.' \
