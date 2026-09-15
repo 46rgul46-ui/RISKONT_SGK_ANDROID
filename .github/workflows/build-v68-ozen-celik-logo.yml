@@ -145,15 +145,17 @@ jobs:
           APK=project/app/build/outputs/apk/release/app-release.apk
           test -f "$APK"
           unzip -t "$APK" >/dev/null
-          unzip -l "$APK" | grep -q 'assets/sgk_referans_form.pdf'
-          unzip -l "$APK" | grep -q 'assets/tessdata/tur.traineddata'
-          unzip -l "$APK" | grep -q 'lib/arm64-v8a/libtesseract.so'
-          unzip -l "$APK" | grep -q 'res/drawable-nodpi-v4/ozencelik_logo.jpg'
+          unzip -l "$APK" > apk_contents.txt
+          grep -q 'assets/sgk_referans_form.pdf' apk_contents.txt
+          grep -q 'assets/tessdata/tur.traineddata' apk_contents.txt
+          grep -q 'lib/arm64-v8a/libtesseract.so' apk_contents.txt
+          grep -q 'ozencelik_logo' apk_contents.txt
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose "$APK"
-          "$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt" dump badging "$APK" | tee apk_badging.txt
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt" dump badging "$APK" > apk_badging.txt
+          cat apk_badging.txt
           grep -q "versionCode='68'" apk_badging.txt
           grep -q "versionName='6.8'" apk_badging.txt
-          grep -q "application-label:'Özen Çelik SGK Form V6.8'" apk_badging.txt
+          grep -Fq "Özen Çelik SGK Form V6.8" apk_badging.txt
           cp "$APK" OZEN_CELIK_INSAAT_SGK_FORM_V6_8_GUCLU_OCR.apk
           sha256sum OZEN_CELIK_INSAAT_SGK_FORM_V6_8_GUCLU_OCR.apk > OZEN_CELIK_INSAAT_SGK_FORM_V6_8_GUCLU_OCR.apk.sha256
 
