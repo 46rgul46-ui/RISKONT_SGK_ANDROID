@@ -40,7 +40,7 @@ jobs:
           test -f project/app/src/main/java/tr/riskont/sgkform/ImageTools.java
           grep -q 'detectGridRois' project/app/src/main/java/tr/riskont/sgkform/ImageTools.java
 
-      - name: Configure Android V6.8
+      - name: Configure Android V6.8 and current JitPack coordinate
         shell: bash
         run: |
           set -euo pipefail
@@ -51,7 +51,8 @@ jobs:
           g = gradle.read_text(encoding='utf-8')
           g = g.replace('versionCode 66', 'versionCode 68')
           g = g.replace("versionName '6.6'", "versionName '6.8'")
-          g = g.replace("implementation 'com.rmtheis:tess-two:9.1.0'", "implementation 'cz.adaptech.tesseract4android:tesseract4android:4.9.0'")
+          g = g.replace("implementation 'com.rmtheis:tess-two:9.1.0'", "implementation 'com.github.adaptech-cz.Tesseract4Android:tesseract4android:4.9.0'")
+          g = g.replace("implementation 'cz.adaptech.tesseract4android:tesseract4android:4.9.0'", "implementation 'com.github.adaptech-cz.Tesseract4Android:tesseract4android:4.9.0'")
           if "pickFirsts += ['**/libc++_shared.so']" not in g:
               g = g.replace('useLegacyPackaging = true\n        }', "useLegacyPackaging = true\n            pickFirsts += ['**/libc++_shared.so']\n        }")
           if "tasks.register('verifyTessdata')" not in g:
@@ -59,14 +60,7 @@ jobs:
           gradle.write_text(g, encoding='utf-8')
 
           settings = Path('project/settings.gradle')
-          s = settings.read_text(encoding='utf-8')
-          if 'jitpack.io' not in s:
-              marker = '        mavenCentral()\n'
-              if marker not in s:
-                  raise SystemExit('mavenCentral repository marker not found')
-              s = s.replace(marker, marker + "        maven { url = uri('https://jitpack.io') }\n", 1)
-          s = s.replace('rootProject.name = "GeciciKorumaSGKFormV66"', 'rootProject.name = "GeciciKorumaSGKFormV68"')
-          settings.write_text(s, encoding='utf-8')
+          settings.write_text('''pluginManagement {\n    repositories {\n        google()\n        mavenCentral()\n        gradlePluginPortal()\n    }\n}\ndependencyResolutionManagement {\n    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)\n    repositories {\n        google()\n        mavenCentral()\n        maven { url = uri("https://jitpack.io") }\n    }\n}\nrootProject.name = "GeciciKorumaSGKFormV68"\ninclude ':app'\n''', encoding='utf-8')
 
           props = Path('project/gradle.properties')
           p = props.read_text(encoding='utf-8') if props.exists() else ''
@@ -76,7 +70,7 @@ jobs:
           PY
           grep -q "versionCode 68" project/app/build.gradle
           grep -q "versionName '6.8'" project/app/build.gradle
-          grep -q "tesseract4android:4.9.0" project/app/build.gradle
+          grep -q "com.github.adaptech-cz.Tesseract4Android:tesseract4android:4.9.0" project/app/build.gradle
           grep -q 'jitpack.io' project/settings.gradle
           grep -q '^android.useAndroidX=true$' project/gradle.properties
 
@@ -106,13 +100,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
           test -d "$ANDROID_SDK_ROOT"
           SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
-          if [ ! -x "$SDKMANAGER" ]; then
-            SDKMANAGER=$(command -v sdkmanager)
-          fi
-          echo "sdkmanager=$SDKMANAGER"
+          if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER=$(command -v sdkmanager); fi
           "$SDKMANAGER" --version
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" "platform-tools"
