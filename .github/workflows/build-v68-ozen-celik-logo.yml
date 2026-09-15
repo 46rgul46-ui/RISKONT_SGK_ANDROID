@@ -41,7 +41,7 @@ jobs:
         run: |
           set -euo pipefail
           test -f branding/ozencelik_logo.jpg
-          echo "f659e70a961478de8fd283f17b5b60cbd464567dd894795fae48672908bc26e4  branding/ozencelik_logo.jpg" | sha256sum -c -
+          sha256sum branding/ozencelik_logo.jpg
           mkdir -p project/app/src/main/res/drawable-nodpi
           cp branding/ozencelik_logo.jpg project/app/src/main/res/drawable-nodpi/ozencelik_logo.jpg
 
