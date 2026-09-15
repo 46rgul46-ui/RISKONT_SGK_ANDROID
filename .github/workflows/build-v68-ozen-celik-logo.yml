@@ -1,0 +1,168 @@
+name: Build V6.8 Ozen Celik Logo APK
+
+on:
+  push:
+    branches:
+      - build-v68-apk-20260915
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+  ANDROID_HOME: /usr/local/lib/android/sdk
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reconstruct base and V6.8 OCR patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat v66_payload/part_*.txt | tr -d '\r\n' | base64 --decode > project.zip
+          echo "85d5c702d7e0012ada55432ecc1c66e4fe7a8947cd1f9b6d7a69b121b75ff81b  project.zip" | sha256sum -c -
+          rm -rf project && mkdir project
+          unzip -q project.zip -d project
+
+          cat v68_patch_payload/part_*.txt | tr -d '\r\n' | base64 --decode > v68_patch.zip
+          echo "c586ec897b6a5831a37e11bc9d4c32f05239e10a734883c41c06e6ae5e5a4457  v68_patch.zip" | sha256sum -c -
+          rm -rf v68_patch && mkdir v68_patch
+          unzip -q v68_patch.zip -d v68_patch
+          cp v68_patch/*.java project/app/src/main/java/tr/riskont/sgkform/
+          grep -q 'detectGridRois' project/app/src/main/java/tr/riskont/sgkform/ImageTools.java
+
+      - name: Apply Ozen Celik branding without touching OCR
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f branding/ozencelik_logo.jpg
+          echo "f659e70a961478de8fd283f17b5b60cbd464567dd894795fae48672908bc26e4  branding/ozencelik_logo.jpg" | sha256sum -c -
+          mkdir -p project/app/src/main/res/drawable-nodpi
+          cp branding/ozencelik_logo.jpg project/app/src/main/res/drawable-nodpi/ozencelik_logo.jpg
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          manifest = Path('project/app/src/main/AndroidManifest.xml')
+          m = manifest.read_text(encoding='utf-8')
+          m = m.replace('android:label="Geçici Koruma SGK Form V6.6"', 'android:label="Özen Çelik SGK Form V6.8"')
+          if 'android:icon="@drawable/ozencelik_logo"' not in m:
+              m = m.replace('android:allowBackup="false"', 'android:allowBackup="false"\n        android:icon="@drawable/ozencelik_logo"\n        android:roundIcon="@drawable/ozencelik_logo"')
+          manifest.write_text(m, encoding='utf-8')
+
+          main = Path('project/app/src/main/java/tr/riskont/sgkform/MainActivity.java')
+          s = main.read_text(encoding='utf-8')
+          if 'import android.widget.ImageView;' not in s:
+              s = s.replace('import android.widget.EditText;\n', 'import android.widget.EditText;\nimport android.widget.ImageView;\n')
+          marker = 'LinearLayout root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);scroll.addView(root,new ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT));\n\n'
+          logo = '''LinearLayout root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);scroll.addView(root,new ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT));\n\n        ImageView brandLogo=new ImageView(this);\n        brandLogo.setImageResource(R.drawable.ozencelik_logo);\n        brandLogo.setAdjustViewBounds(true);\n        brandLogo.setScaleType(ImageView.ScaleType.FIT_CENTER);\n        brandLogo.setBackgroundColor(Color.rgb(12,14,16));\n        brandLogo.setPadding(dp(10),dp(8),dp(10),dp(8));\n        root.addView(brandLogo,new LinearLayout.LayoutParams(-1,dp(170)));\n\n'''
+          if 'brandLogo.setImageResource(R.drawable.ozencelik_logo);' not in s:
+              if marker not in s:
+                  raise SystemExit('UI root marker not found')
+              s = s.replace(marker, logo, 1)
+          main.write_text(s, encoding='utf-8')
+          PY
+
+          grep -q 'android:icon="@drawable/ozencelik_logo"' project/app/src/main/AndroidManifest.xml
+          grep -q 'Özen Çelik SGK Form V6.8' project/app/src/main/AndroidManifest.xml
+          grep -q 'R.drawable.ozencelik_logo' project/app/src/main/java/tr/riskont/sgkform/MainActivity.java
+
+      - name: Configure Android V6.8 OCR engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          gradle = Path('project/app/build.gradle')
+          g = gradle.read_text(encoding='utf-8')
+          g = g.replace('versionCode 66', 'versionCode 68')
+          g = g.replace("versionName '6.6'", "versionName '6.8'")
+          g = g.replace("implementation 'com.rmtheis:tess-two:9.1.0'", "implementation 'com.github.adaptech-cz.Tesseract4Android:tesseract4android:4.9.0'")
+          g = g.replace("implementation 'cz.adaptech.tesseract4android:tesseract4android:4.9.0'", "implementation 'com.github.adaptech-cz.Tesseract4Android:tesseract4android:4.9.0'")
+          if "pickFirsts += ['**/libc++_shared.so']" not in g:
+              g = g.replace('useLegacyPackaging = true\n        }', "useLegacyPackaging = true\n            pickFirsts += ['**/libc++_shared.so']\n        }")
+          if "tasks.register('verifyTessdata')" not in g:
+              g += '''\n\ntasks.register('verifyTessdata') {\n    def model = file('src/main/assets/tessdata/tur.traineddata')\n    inputs.file(model)\n    doLast {\n        if (!model.exists() || model.length() < 1000000L) {\n            throw new GradleException('OCR modeli eksik')\n        }\n    }\n}\npreBuild.dependsOn verifyTessdata\n'''
+          gradle.write_text(g, encoding='utf-8')
+
+          Path('project/settings.gradle').write_text('''pluginManagement {\n    repositories {\n        google()\n        mavenCentral()\n        gradlePluginPortal()\n    }\n}\ndependencyResolutionManagement {\n    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)\n    repositories {\n        google()\n        mavenCentral()\n        maven { url = uri("https://jitpack.io") }\n    }\n}\nrootProject.name = "GeciciKorumaSGKFormV68"\ninclude ':app'\n''', encoding='utf-8')
+
+          props = Path('project/gradle.properties')
+          p = props.read_text(encoding='utf-8') if props.exists() else ''
+          lines = [x for x in p.splitlines() if not x.startswith('android.useAndroidX=')]
+          lines.append('android.useAndroidX=true')
+          props.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+          PY
+          grep -q "versionCode 68" project/app/build.gradle
+          grep -q "versionName '6.8'" project/app/build.gradle
+          grep -q "com.github.adaptech-cz.Tesseract4Android:tesseract4android:4.9.0" project/app/build.gradle
+
+      - name: Install high accuracy Turkish OCR model
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p project/app/src/main/assets/tessdata
+          rm -f project/app/src/main/assets/tessdata/tur.traineddata
+          curl -L --fail --retry 4 --retry-delay 2 \
+            https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/main/tur.traineddata \
+            -o project/app/src/main/assets/tessdata/tur.traineddata
+          echo "e0c3338dc17503dc7d335a507c9ae01b2b46cfd07561171e1e1ac55d85e8e438  project/app/src/main/assets/tessdata/tur.traineddata" | sha256sum -c -
+          echo "b2eb947c8e39efe85a90f43a2d5836886d581858cbcd1e6e237dcc73c74075f3  project/app/src/main/assets/sgk_referans_form.pdf" | sha256sum -c -
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Use preinstalled Android SDK 35
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER=$(command -v sdkmanager); fi
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build branded V6.8 Release APK
+        working-directory: project
+        run: gradle --no-daemon assembleRelease
+
+      - name: Verify branded V6.8 APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=project/app/build/outputs/apk/release/app-release.apk
+          test -f "$APK"
+          unzip -t "$APK" >/dev/null
+          unzip -l "$APK" | grep -q 'assets/sgk_referans_form.pdf'
+          unzip -l "$APK" | grep -q 'assets/tessdata/tur.traineddata'
+          unzip -l "$APK" | grep -q 'lib/arm64-v8a/libtesseract.so'
+          unzip -l "$APK" | grep -q 'res/drawable-nodpi-v4/ozencelik_logo.jpg'
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose "$APK"
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt" dump badging "$APK" | tee apk_badging.txt
+          grep -q "versionCode='68'" apk_badging.txt
+          grep -q "versionName='6.8'" apk_badging.txt
+          grep -q "application-label:'Özen Çelik SGK Form V6.8'" apk_badging.txt
+          cp "$APK" OZEN_CELIK_INSAAT_SGK_FORM_V6_8_GUCLU_OCR.apk
+          sha256sum OZEN_CELIK_INSAAT_SGK_FORM_V6_8_GUCLU_OCR.apk > OZEN_CELIK_INSAAT_SGK_FORM_V6_8_GUCLU_OCR.apk.sha256
+
+      - name: Upload branded APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: OZEN-CELIK-INSAAT-SGK-FORM-V6-8-GUCLU-OCR
+          path: |
+            OZEN_CELIK_INSAAT_SGK_FORM_V6_8_GUCLU_OCR.apk
+            OZEN_CELIK_INSAAT_SGK_FORM_V6_8_GUCLU_OCR.apk.sha256
+          if-no-files-found: error
+          retention-days: 30
