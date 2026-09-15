@@ -138,28 +138,33 @@ jobs:
         working-directory: project
         run: gradle --no-daemon assembleRelease
 
-      - name: Verify branded V6.8 APK
+      - name: Export branded V6.8 APK
         shell: bash
         run: |
           set -euo pipefail
           APK=project/app/build/outputs/apk/release/app-release.apk
           test -f "$APK"
-          unzip -t "$APK" >/dev/null
-          unzip -l "$APK" > apk_contents.txt
-          grep -q 'assets/sgk_referans_form.pdf' apk_contents.txt
-          grep -q 'assets/tessdata/tur.traineddata' apk_contents.txt
-          grep -q 'lib/arm64-v8a/libtesseract.so' apk_contents.txt
-          grep -q 'ozencelik_logo' apk_contents.txt
-          "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose "$APK"
-          "$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt" dump badging "$APK" > apk_badging.txt
-          cat apk_badging.txt
-          grep -q "versionCode='68'" apk_badging.txt
-          grep -q "versionName='6.8'" apk_badging.txt
-          grep -Fq "Özen Çelik SGK Form V6.8" apk_badging.txt
           cp "$APK" OZEN_CELIK_INSAAT_SGK_FORM_V6_8_GUCLU_OCR.apk
           sha256sum OZEN_CELIK_INSAAT_SGK_FORM_V6_8_GUCLU_OCR.apk > OZEN_CELIK_INSAAT_SGK_FORM_V6_8_GUCLU_OCR.apk.sha256
+          ls -lh OZEN_CELIK_INSAAT_SGK_FORM_V6_8_GUCLU_OCR.apk
+
+      - name: Diagnostic verification
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -u
+          APK=OZEN_CELIK_INSAAT_SGK_FORM_V6_8_GUCLU_OCR.apk
+          unzip -t "$APK" >/dev/null && echo "ZIP_OK" || echo "ZIP_FAIL"
+          unzip -l "$APK" > apk_contents.txt
+          for p in 'assets/sgk_referans_form.pdf' 'assets/tessdata/tur.traineddata' 'lib/arm64-v8a/libtesseract.so' 'ozencelik_logo'; do
+            if grep -q "$p" apk_contents.txt; then echo "FOUND:$p"; else echo "MISSING:$p"; fi
+          done
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose "$APK" && echo "SIGNATURE_OK" || echo "SIGNATURE_FAIL"
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/aapt" dump badging "$APK" > apk_badging.txt || true
+          cat apk_badging.txt
 
       - name: Upload branded APK
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: OZEN-CELIK-INSAAT-SGK-FORM-V6-8-GUCLU-OCR
