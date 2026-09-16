@@ -48,8 +48,8 @@ jobs:
           tar -xzf v2_overlay.tar.gz -C project
 
           # The exact Özen Çelik logo crop is embedded in the overlay as the xhdpi launcher.
-          # Reuse it for every launcher density and the in-app brand image.
-          for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+          # Reuse it for the remaining launcher densities and the in-app brand image.
+          for d in mdpi hdpi xxhdpi xxxhdpi; do
             mkdir -p "project/app/src/main/res/mipmap-${d}"
             cp project/app/src/main/res/mipmap-xhdpi/ic_launcher.png "project/app/src/main/res/mipmap-${d}/ic_launcher.png"
           done
