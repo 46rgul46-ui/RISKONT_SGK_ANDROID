@@ -47,8 +47,6 @@ jobs:
             | tr -d '\r\n' | base64 --decode > v2_overlay.tar.gz
           tar -xzf v2_overlay.tar.gz -C project
 
-          # The exact Özen Çelik logo crop is embedded in the overlay as the xhdpi launcher.
-          # Reuse it for the remaining launcher densities and the in-app brand image.
           for d in mdpi hdpi xxhdpi xxxhdpi; do
             mkdir -p "project/app/src/main/res/mipmap-${d}"
             cp project/app/src/main/res/mipmap-xhdpi/ic_launcher.png "project/app/src/main/res/mipmap-${d}/ic_launcher.png"
@@ -56,10 +54,159 @@ jobs:
           mkdir -p project/app/src/main/res/drawable-nodpi
           cp project/app/src/main/res/mipmap-xhdpi/ic_launcher.png project/app/src/main/res/drawable-nodpi/ozen_celik_logo.png
 
-          test -s project/app/src/main/java/com/riskont/sgkform/MainActivity.kt
-          test -s project/app/src/main/res/layout/activity_main.xml
-          test -s project/app/src/main/res/drawable-nodpi/ozen_celik_logo.png
-          echo "Android V2 overlay applied."
+      - name: Patch OCR V2.1
+        shell: python
+        run: |
+          from pathlib import Path
+
+          p = Path('project/app/src/main/java/com/riskont/sgkform/MainActivity.kt')
+          s = p.read_text()
+
+          old = '''            } catch (e: Exception) {
+                          txtStatus.text = "OCR hatası: ${e.message ?: "Bilinmeyen hata"}"
+                          txtWarnings.visibility = View.VISIBLE
+                          txtWarnings.text = "Kimlik tamamen okunamadı. Fotoğrafı yeniden deneyebilir veya alanları elle doldurabilirsiniz."
+                          toast("Kimlik okunamadı. Alanları elle doldurabilir veya fotoğrafı tekrar deneyebilirsiniz.")
+                      } finally {'''
+          # tolerate source indentation exactly as reconstructed
+          old = old.replace('                          ', '                ')
+          new = '''            } catch (oom: OutOfMemoryError) {
+                          txtStatus.text = "OCR bellek hatası. Fotoğraf güvenli boyuta küçültülerek tekrar denenebilir."
+                          txtWarnings.visibility = View.VISIBLE
+                          txtWarnings.text = "Telefon fotoğrafı çok yüksek çözünürlüklü. V2.1 fotoğrafı belleğe almadan örnekleyerek okuyacak."
+                          toast("Kimlik fotoğrafı çok büyük geldi. V2.1 bellek koruması devrede.")
+                      } catch (e: Exception) {
+                          val detail = e.message?.take(120) ?: e.javaClass.simpleName
+                          txtStatus.text = "OCR hatası: $detail"
+                          txtWarnings.visibility = View.VISIBLE
+                          txtWarnings.text = "Kimlik otomatik okunamadı. Teknik ayrıntı: $detail. Alanları elle doldurabilir veya fotoğrafı tekrar deneyebilirsiniz."
+                          toast("Kimlik okunamadı: $detail")
+                      } finally {'''.replace('                          ', '                ')
+          if old not in s:
+              raise SystemExit('processCard catch block not found')
+          s = s.replace(old, new)
+
+          old = '''        for (angle in listOf(0f, 180f, 90f, 270f)) {
+                      val candidate = if (angle == 0f) base else rotate(base, angle)
+                      val snapshot = analyzeBitmap(candidate)
+                      if (best == null || snapshot.score > best!!.score) best = snapshot
+                  }
+
+                  val primary = best ?: error("OCR sonucu üretilemedi")'''.replace('                      ', '            ')
+          new = '''        var lastOcrError: Exception? = null
+                  for (angle in listOf(0f, 180f, 90f, 270f)) {
+                      val candidate = if (angle == 0f) base else rotate(base, angle)
+                      try {
+                          val snapshot = analyzeBitmap(candidate)
+                          if (best == null || snapshot.score > best!!.score) best = snapshot
+                      } catch (e: Exception) {
+                          lastOcrError = e
+                      }
+                  }
+
+                  val primary = best ?: throw (lastOcrError ?: IllegalStateException("OCR sonucu üretilemedi"))'''.replace('                  ', '        ')
+          if old not in s:
+              raise SystemExit('orientation OCR block not found')
+          s = s.replace(old, new)
+
+          old = '''        val gray = enhanceContrast(primary.bitmap)
+                  allSnapshots += analyzeBitmap(gray)
+                  val noBlue = suppressBlueInk(primary.bitmap)
+                  allSnapshots += analyzeBitmap(noBlue)'''.replace('                  ', '        ')
+          new = '''        val gray = enhanceContrast(primary.bitmap)
+                  try { allSnapshots += analyzeBitmap(gray) } catch (_: Exception) { }
+                  val noBlue = suppressBlueInk(primary.bitmap)
+                  try { allSnapshots += analyzeBitmap(noBlue) } catch (_: Exception) { }'''.replace('                  ', '        ')
+          if old not in s:
+              raise SystemExit('secondary OCR block not found')
+          s = s.replace(old, new)
+
+          old = '''        for (field in FIELD_KEYS) {
+                      val crop = cropFieldRow(primary.bitmap, field, anchors, splitX)
+                      val raw = recognizeSimple(crop)
+                      normalizeCandidate(field, raw).takeIf { it.isNotBlank() }?.let { candidates.getValue(field).add(it) }
+                  }'''.replace('                      ', '            ')
+          new = '''        for (field in FIELD_KEYS) {
+                      try {
+                          val crop = cropFieldRow(primary.bitmap, field, anchors, splitX)
+                          val raw = recognizeSimple(crop)
+                          normalizeCandidate(field, raw).takeIf { it.isNotBlank() }?.let { candidates.getValue(field).add(it) }
+                      } catch (_: Exception) { }
+                  }'''.replace('                      ', '            ')
+          if old not in s:
+              raise SystemExit('row OCR block not found')
+          s = s.replace(old, new)
+
+          old = '''            for (variant in variants) {
+                          val raw = recognizeSimple(variant)
+                          normalizeCandidate(field, raw).takeIf { it.isNotBlank() }?.let { candidates.getValue(field).add(it) }
+                      }'''.replace('                          ', '                ')
+          new = '''            for (variant in variants) {
+                          try {
+                              val raw = recognizeSimple(variant)
+                              normalizeCandidate(field, raw).takeIf { it.isNotBlank() }?.let { candidates.getValue(field).add(it) }
+                          } catch (_: Exception) { }
+                      }'''.replace('                          ', '                ')
+          if old not in s:
+              raise SystemExit('aggressive OCR block not found')
+          s = s.replace(old, new)
+
+          start = s.index('    private fun loadBitmapOriented(uri: Uri): Bitmap {')
+          end = s.index('\n    private fun rotate(src: Bitmap, angle: Float): Bitmap {', start)
+          newfunc = '''    private fun loadBitmapOriented(uri: Uri): Bitmap {
+                  val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                  contentResolver.openInputStream(uri)?.use { input ->
+                      BitmapFactory.decodeStream(input, null, bounds)
+                  } ?: error("Görsel açılamadı")
+
+                  if (bounds.outWidth <= 0 || bounds.outHeight <= 0) error("Görsel boyutları okunamadı")
+
+                  val decodeTarget = 2600
+                  var sample = 1
+                  while (max(bounds.outWidth / sample, bounds.outHeight / sample) > decodeTarget * 2) {
+                      sample *= 2
+                  }
+
+                  val options = BitmapFactory.Options().apply {
+                      inSampleSize = sample
+                      inPreferredConfig = Bitmap.Config.ARGB_8888
+                  }
+                  var bitmap = contentResolver.openInputStream(uri)?.use { input ->
+                      BitmapFactory.decodeStream(input, null, options)
+                  } ?: error("Görsel çözülemedi")
+
+                  val orientation = try {
+                      contentResolver.openInputStream(uri)?.use { input ->
+                          ExifInterface(input).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+                      } ?: ExifInterface.ORIENTATION_NORMAL
+                  } catch (_: Exception) {
+                      ExifInterface.ORIENTATION_NORMAL
+                  }
+
+                  bitmap = when (orientation) {
+                      ExifInterface.ORIENTATION_ROTATE_90 -> rotate(bitmap, 90f)
+                      ExifInterface.ORIENTATION_ROTATE_180 -> rotate(bitmap, 180f)
+                      ExifInterface.ORIENTATION_ROTATE_270 -> rotate(bitmap, 270f)
+                      ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> flip(bitmap, horizontal = true)
+                      ExifInterface.ORIENTATION_FLIP_VERTICAL -> flip(bitmap, horizontal = false)
+                      ExifInterface.ORIENTATION_TRANSPOSE -> rotate(flip(bitmap, horizontal = true), 90f)
+                      ExifInterface.ORIENTATION_TRANSVERSE -> rotate(flip(bitmap, horizontal = true), 270f)
+                      else -> bitmap
+                  }
+                  return scaleForOcr(bitmap, 2400)
+              }
+          '''.replace('              ', '    ')
+          s = s[:start] + newfunc + s[end:]
+          p.write_text(s)
+
+          bp = Path('project/app/build.gradle.kts')
+          b = bp.read_text().replace('versionCode = 20', 'versionCode = 21').replace('versionName = "2.0"', 'versionName = "2.1"')
+          bp.write_text(b)
+
+          lp = Path('project/app/src/main/res/layout/activity_main.xml')
+          lp.write_text(lp.read_text().replace('ANDROID V2.0', 'ANDROID V2.1'))
+
+          print('V2.1 OCR fix applied')
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -79,7 +226,6 @@ jobs:
           if [ ! -x "$SDKMANAGER" ]; then
             SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort | tail -1)"
           fi
-          echo "Using sdkmanager: $SDKMANAGER"
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" "platform-tools"
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
@@ -99,14 +245,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cp project/app/build/outputs/apk/debug/app-debug.apk RISKONT_SGK_FORM_ANDROID_V2_0.apk
-          ls -lh RISKONT_SGK_FORM_ANDROID_V2_0.apk
-          sha256sum RISKONT_SGK_FORM_ANDROID_V2_0.apk
+          cp project/app/build/outputs/apk/debug/app-debug.apk RISKONT_SGK_FORM_ANDROID_V2_1.apk
+          ls -lh RISKONT_SGK_FORM_ANDROID_V2_1.apk
+          sha256sum RISKONT_SGK_FORM_ANDROID_V2_1.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: RISKONT-SGK-Android-V2-0
-          path: RISKONT_SGK_FORM_ANDROID_V2_0.apk
+          name: RISKONT-SGK-Android-V2-1
+          path: RISKONT_SGK_FORM_ANDROID_V2_1.apk
           if-no-files-found: error
           retention-days: 30
