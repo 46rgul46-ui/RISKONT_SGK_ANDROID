@@ -1,0 +1,122 @@
+name: Build Android V2.2 APK
+
+on:
+  push:
+    branches: [ android-v2 ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reconstruct base Android project
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat \
+            payload/part01.txt \
+            payload/part02.txt \
+            fix/p03_1.txt \
+            fix/p03_2.txt \
+            fix/p03_3.txt \
+            payload/part04.txt \
+            payload/part05.txt \
+            fix/p06_1.txt \
+            fix/p06_2.txt \
+            fix/p06_3.txt \
+            payload/part07.txt \
+            payload/part08.txt \
+          | tr -d '\r\n' | base64 --decode > project.zip
+          unzip -t project.zip
+          rm -rf project
+          mkdir -p project
+          unzip -q project.zip -d project
+
+      - name: Apply Android V2 UI and logo overlay
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat v2overlay/chunk00.txt v2overlay/chunk01.txt v2overlay/chunk02.txt v2overlay/chunk03.txt \
+            | tr -d '\r\n' | base64 --decode > v2_overlay.tar.gz
+          tar -xzf v2_overlay.tar.gz -C project
+          for d in mdpi hdpi xxhdpi xxxhdpi; do
+            mkdir -p "project/app/src/main/res/mipmap-${d}"
+            cp project/app/src/main/res/mipmap-xhdpi/ic_launcher.png "project/app/src/main/res/mipmap-${d}/ic_launcher.png"
+          done
+          mkdir -p project/app/src/main/res/drawable-nodpi
+          cp project/app/src/main/res/mipmap-xhdpi/ic_launcher.png project/app/src/main/res/drawable-nodpi/ozen_celik_logo.png
+
+      - name: Apply V2.2 robust image-loader and OCR source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat v22fix/chunk00.txt v22fix/chunk01.txt | tr -d '\r\n' | base64 --decode > v22_fix.tar.gz
+          tar -xzf v22_fix.tar.gz -C project
+          python - <<'PY'
+          from pathlib import Path
+          bp = Path('project/app/build.gradle.kts')
+          b = bp.read_text()
+          import re
+          b = re.sub(r'versionCode\s*=\s*\d+', 'versionCode = 22', b)
+          b = re.sub(r'versionName\s*=\s*"[^"]+"', 'versionName = "2.2"', b)
+          bp.write_text(b)
+          lp = Path('project/app/src/main/res/layout/activity_main.xml')
+          t = lp.read_text().replace('ANDROID V2.0', 'ANDROID V2.2').replace('ANDROID V2.1', 'ANDROID V2.2')
+          lp.write_text(t)
+          PY
+          grep -q 'copyUriToLocalCache' project/app/src/main/java/com/riskont/sgkform/MainActivity.kt
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android SDK 35
+        shell: bash
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+        run: |
+          set -euo pipefail
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort | tail -1)"
+          fi
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/build-tools/35.0.0" >> "$GITHUB_PATH"
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build APK
+        working-directory: project
+        run: gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Prepare APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp project/app/build/outputs/apk/debug/app-debug.apk RISKONT_SGK_FORM_ANDROID_V2_2.apk
+          ls -lh RISKONT_SGK_FORM_ANDROID_V2_2.apk
+          sha256sum RISKONT_SGK_FORM_ANDROID_V2_2.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: RISKONT-SGK-Android-V2-2
+          path: RISKONT_SGK_FORM_ANDROID_V2_2.apk
+          if-no-files-found: error
+          retention-days: 30
